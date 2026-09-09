@@ -1,0 +1,37 @@
+name: Security
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.12'
+      - name: Audit runtime and test dependencies
+        run: |
+          uv export --frozen --extra dev --no-emit-project --no-hashes --format requirements-txt --output-file "$RUNNER_TEMP/audit.txt"
+          uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/audit.txt" --no-deps --disable-pip
+      - name: Static security analysis
+        run: uvx bandit==1.9.4 -r src -ll
+      - name: Install checksum-pinned secret scanner
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan working files and all history (redacted)
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir . --redact --max-archive-depth 2
+          "$RUNNER_TEMP/gitleaks" git . --redact --log-opts="--all"
+      - name: Reject private paths and configured widget exports
+        run: python scripts/check_publication.py

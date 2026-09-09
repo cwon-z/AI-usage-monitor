@@ -1,0 +1,29 @@
+name: Verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.12'
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen pytest
+      - run: uvx ruff==0.16.6 check src tests scripts widgets/kwgt
+      - run: uvx ruff==0.16.6 format --check src tests scripts widgets/kwgt
+      - run: uv run --frozen python scripts/check_publication.py
+      - name: Check exported runtime constraints
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file requirements.lock
+          git diff --exit-code -- requirements.lock
+      - run: docker build -t ai-usage-monitor:patched .
+      - name: Non-root offline container smoke
+        run: docker run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges ai-usage-monitor:patched python - < tests/container_smoke.py
+      - name: Compose and mounted-secret smoke
+        run: uv run --frozen python tests/compose_smoke.py
