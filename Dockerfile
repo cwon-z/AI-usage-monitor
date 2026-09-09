@@ -6,7 +6,7 @@ RUN npm install --global --omit=dev \
     "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     "@openai/codex@${CODEX_VERSION}"
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 ARG APP_UID=10001
 ARG APP_GID=10001
