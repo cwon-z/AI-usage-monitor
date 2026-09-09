@@ -1,0 +1,32 @@
+services:
+  ai-usage-monitor:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: "2.1.266"
+        CODEX_VERSION: "0.150.1"
+        APP_UID: ${APP_UID:-10001}
+        APP_GID: ${APP_GID:-10001}
+    image: ai-usage-monitor:local
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-.env}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - usage-data:/data
+      - type: bind
+        source: ${SECRETS_DIR:-./secrets}
+        target: /run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+volumes:
+  usage-data:

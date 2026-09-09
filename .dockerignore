@@ -1,0 +1,12 @@
+# Only Dockerfile inputs may enter the build context.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!requirements.lock
+!README.md
+!LICENSE
+!src/
+!src/**
+**/__pycache__/**
+**/*.py[cod]
