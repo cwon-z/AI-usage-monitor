@@ -18,7 +18,7 @@ Widget reads never query providers. The collector persists snapshots, prunes his
 
 - **Claude:** a read-only GET to the **undocumented** OAuth usage endpoint used by Claude Code 2.1.266, verified against the installed CLI and live subscription data. Its response is isolated in [the Claude adapter](src/ai_usage_monitor/providers/claude.py). Collection does not launch Claude Code, generate model requests, follow redirects, use environment proxies, or refresh credentials. The CLI's experimental control channel returned null quota data under isolated authentication, so it is not used. The image includes the pinned Claude CLI for diagnostics only.
 - **Codex:** the [documented app-server interface](https://learn.chatgpt.com/docs/app-server), specifically `account/rateLimits/read`. A private temporary `CODEX_HOME` receives only access/ID tokens, account ID, an empty refresh-token field, and fresh cache metadata. An isolated working directory and allowlisted environment prevent inherited auth/routing overrides. No prompt or model turn is submitted.
-- Credentials are read server-side only. No real refresh token is supplied to a child or refresh endpoint. Expired access tokens fail closed; the monitor does not manage your login lifecycle.
+- Credentials are read server-side only, and the adapters strip refresh credentials before any child process or request. Expired access tokens fail closed; the monitor itself never renews a session. Renewal, where you want it, is delegated to the provider's own CLI holding its own login — see [Durable alternative](#durable-alternative-give-the-deployment-its-own-login).
 - Claude's five-hour window is exposed as `session`; `capabilities.five_hour` means that session has a known five-hour duration. Codex's `five_hour` and `weekly` both refer to the canonical bucket, never a mixture of model buckets. Model-specific Codex limits remain labeled under `additional_windows`. Missing quotas stay null.
 - Claude consumed extra-usage credits are **not** a remaining balance; Claude `credits` is null. Codex balances remain decimal strings in the units reported by Codex, not an inferred currency.
 
@@ -32,7 +32,46 @@ The export utility reads your existing authenticated state and creates narrow, a
 - Claude on macOS: explicitly select the Keychain service below. Custom Claude configuration directories may use a different service name.
 - Codex: `~/.codex/auth.json` from an existing ChatGPT login. Keyring-only Codex storage is not automatically extracted; supply a supported auth file.
 
-**Access-token snapshots expire.** When the source CLI renews its normal session, rerun the export with `--replace-provider-snapshots` and securely transfer the updated snapshots to the homelab if needed. Directory mounting means atomic replacements are picked up at the next poll without restarting. Re-exporting an expired source does not renew it: use your normal provider client to restore its session first. This operational requirement is intentional to preserve read-only authentication.
+**Access-token snapshots expire, and can die before their stated expiry.** When the source CLI renews its normal session, rerun the export with `--replace-provider-snapshots` and securely transfer the updated snapshots to the homelab if needed. Directory mounting means atomic replacements are picked up at the next poll without restarting. Re-exporting an expired source does not renew it: use your normal provider client to restore its session first. This operational requirement is intentional to preserve read-only authentication.
+
+Do not rely on `expiresAt` as the deadline. Refreshing **rotates** the token, so the moment the source CLI renews, every exported copy of the previous access token stops working — in practice a snapshot can fail hours early, with no warning beyond the provider's `status` going to `error`. Snapshots suit a short-lived or supervised deployment. For anything unattended, prefer the durable path below.
+
+### Durable alternative: give the deployment its own login
+
+Instead of copying your credentials, let the deployment hold an **independent grant**. Log in once inside the running container:
+
+```bash
+docker compose exec ai-usage-monitor claude auth login --claudeai
+```
+
+then point the adapter at that credential file rather than the export:
+
+```bash
+CLAUDE_CREDENTIALS_FILE=/home/app/.claude/.credentials.json
+```
+
+This needs a persistent home so the login survives container recreation; `docker-compose.override.yml.example` shows the named volume (`app-home` at `/home/app`). Claude Code writes both `~/.claude/.credentials.json` and `~/.claude.json`, so the whole home is persisted, not just `.claude/`. No adapter change is involved: the file has the same shape as an export, and refresh credentials are still stripped before any request.
+
+Renewal has to be driven deliberately, because of how the pinned CLI behaves. Measured against Claude Code 2.1.266:
+
+| Situation | Result |
+|---|---|
+| `claude auth status` | **Never refreshes** — reports the stored file only |
+| Authenticated call, ~30 min remaining | Declined |
+| Authenticated call, ~5 min remaining | Refreshed, ~8h granted |
+| Authenticated call, already expired | Refreshed, ~8h granted |
+
+So `scripts/refresh-claude-auth.sh` reads the expiry cheaply (no quota, no request) and only inside that window issues one trivial Haiku prompt purely as a refresh trigger — one or two calls per 8-hour cycle. Run it from cron on the deployment host:
+
+```cron
+*/5 * * * * /srv/data/ai-usage-monitor/scripts/refresh-claude-auth.sh >> /srv/data/ai-usage-monitor/refresh-auth.log 2>&1
+```
+
+It stays silent while healthy, so the log holds only refreshes and failures. `THRESHOLD` overrides the 600-second window when testing.
+
+**Never copy a refresh token to a second machine.** Rotation means two holders of one grant will fight: whichever refreshes second presents a superseded token and is locked out — including, if you copy from your workstation, your own CLI. Give each deployment its own login. `refreshTokenExpiresAt` runs about 30 days and is renewed on each rotation, so only a deployment offline longer than that needs an interactive login again.
+
+Codex has no equivalent path wired here yet. It still runs from an exported snapshot whose JWT typically lasts about five days, after which it must be re-exported.
 
 ## Docker deployment
 
@@ -116,7 +155,7 @@ Compose publishes only `127.0.0.1:8000`, drops all capabilities, sets `no-new-pr
 | `PROVIDER_RETRY_ATTEMPTS` | 3 |
 | `PROVIDER_RETRY_BASE_SECONDS` | 0.5, exponential backoff |
 | `CLAUDE_ENABLED` / `CODEX_ENABLED` | true |
-| `CLAUDE_CREDENTIALS_FILE` | Local Claude credential/export JSON; Compose uses narrow export |
+| `CLAUDE_CREDENTIALS_FILE` | Claude credential/export JSON. Narrow export (`/run/secrets/...`) or the deployment's own login (`/home/app/.claude/.credentials.json`) |
 | `CODEX_AUTH_FILE` | Local Codex auth/export JSON; Compose uses narrow export |
 | `CLAUDE_OAUTH_TOKEN_FILE` / `CLAUDE_OAUTH_TOKEN` | Advanced raw access-token alternatives; must already have profile and inference scopes |
 | `CLAUDE_OAUTH_SCOPES` | `user:profile user:inference`; declaring scopes does not grant them |
@@ -211,7 +250,7 @@ These values are **remaining** quota: 100 is a fresh window and 0 is exhausted, 
 
 - `authentication_missing`: check the mounted file and UID/GID using preflight.
 - `authentication_invalid`: credential shape is unsupported or corrupt; re-export the correct subscription session.
-- `authentication_expired`: export a fresh access-token snapshot after the normal client has renewed its session.
+- `authentication_expired`: export a fresh access-token snapshot after the normal client has renewed its session. Recurring daily means the snapshot is being rotated out from under you — move that provider to its own login instead. Note this is logged at `info`, and neither container health nor `/api/v1/health` covers provider auth, so grepping logs for error levels will report a false all-clear; check each provider's `status` or run `python -m ai_usage_monitor.preflight`.
 - `authentication_scope_missing`: use a profile-capable Claude login, not an inference-only setup token. A 403 may also indicate account policy restrictions.
 - `upstream_error` / `timeout`: bounded retries and future scheduled cycles continue; cached data remains available. Raw upstream errors and headers are not exposed.
 - `cli_unavailable`: verify Codex is installed/executable inside the runtime.

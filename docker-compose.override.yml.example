@@ -1,0 +1,24 @@
+# Copy to docker-compose.override.yml and edit for your host. Not tracked:
+# the published address is deployment-specific, and the base compose file
+# deliberately stays generic.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+
+services:
+  ai-usage-monitor:
+    # The base file publishes 127.0.0.1:8000, which is unreachable from a
+    # phone and collides with anything else already on 8000. Bind a private
+    # interface (Tailscale, WireGuard, LAN) instead. `!override` replaces the
+    # base list rather than appending to it.
+    ports: !override
+      - "203.0.113.10:9010:8000"
+
+    volumes:
+      # Required only for the durable auth path in the README, where the
+      # deployment holds its own Claude login instead of an exported snapshot.
+      # The whole home is persisted because Claude Code writes both
+      # ~/.claude/.credentials.json and ~/.claude.json.
+      - app-home:/home/app
+
+volumes:
+  app-home:
