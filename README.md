@@ -96,6 +96,20 @@ Nothing renews the ~10-day access token on its own, so `scripts/refresh-codex-au
 
 Exported Codex snapshots carry no refresh token at all and still expire after roughly ten days; use them only where the durable path is not possible.
 
+### Alerting and fast re-login
+
+Renewal cannot survive a revoked grant, and nothing in the service reports one: `/api/v1/health` stays `ok`, the container stays healthy, and `provider_auth_expired` logs at INFO. `scripts/auth-watchdog.py` closes that gap. From cron on the deployment host, it reads `/usage/compact` with the widget token, which never leaves the host, and pushes up/down to an [Uptime Kuma](https://github.com/louislam/uptime-kuma) push monitor. Kuma then handles notification, and marks the monitor down on its own if the pushes stop:
+
+```cron
+*/5 * * * * /srv/data/ai-usage-monitor/scripts/auth-watchdog.py >> /srv/data/ai-usage-monitor/watchdog.log 2>&1
+```
+
+It needs `state/kuma-push-url` and, optionally, `state/discord-webhook` (both mode 600, ignored by Git). A provider counts as down when its error is `authentication_*`, or when it is stale for any other reason.
+
+When the Codex login is dead, the watchdog also starts a device login and posts the link and code to Discord, so re-login is one approval from a phone. Without a webhook, the code rides in the Kuma alert instead. A fresh code is offered every 3 hours (`CODEX_LOGIN_REOFFER_SECONDS`) while the login stays dead, or on demand with `--codex-login`. The login runs in a staging `CODEX_HOME` and replaces the live `auth.json` only once approved, because `codex login` deletes the existing file the moment it starts. Logging in in place would destroy a working grant on a false alarm. On approval it requests an immediate collection.
+
+Claude has no device flow, so its alert carries one command instead: `ssh -t <host> …/scripts/claude-login.sh`, which runs the login and then `auth-watchdog.py --kick` to collect at once. `--test-alert` sends a labelled DOWN/UP pair through Kuma and a test post through the webhook.
+
 ## Docker deployment
 
 Requires Docker with Compose v2; Python 3.12+ and uv on the trusted machine used to export credentials. Do not run the exporter as root.

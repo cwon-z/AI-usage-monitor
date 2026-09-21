@@ -15,6 +15,7 @@ htmlcov/
 *.db-*
 data/
 secrets/
+state/
 
 # Local auth, database variants, build output, and workstation files.
 .claude/
