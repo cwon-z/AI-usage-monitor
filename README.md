@@ -71,7 +71,30 @@ It stays silent while healthy, so the log holds only refreshes and failures. `TH
 
 **Never copy a refresh token to a second machine.** Rotation means two holders of one grant will fight: whichever refreshes second presents a superseded token and is locked out — including, if you copy from your workstation, your own CLI. Give each deployment its own login. `refreshTokenExpiresAt` runs about 30 days and is renewed on each rotation, so only a deployment offline longer than that needs an interactive login again.
 
-Codex has no equivalent path wired here yet. It still runs from an exported snapshot whose JWT typically lasts about five days, after which it must be re-exported.
+A grant can also be revoked upstream (signing out of all sessions, for example). The access token then returns 401 hours before its `expiresAt`, and the next refresh attempt is rejected, after which the CLI blanks the credential file. The script reports that as `logged out` rather than a refresh failure; the only fix is another interactive login.
+
+**Codex** works the same way. Log in once with device authorization, which needs no browser on the server, and point the adapter at the file it writes into the same persisted home:
+
+```bash
+docker compose exec ai-usage-monitor codex login --device-auth
+CODEX_AUTH_FILE=/home/app/.codex/auth.json
+```
+
+The adapter still copies only the access and ID tokens into a private runtime home with an empty refresh token and fresh metadata, so collection never rotates the grant. Measured against Codex CLI 0.150.1:
+
+| Situation | Result |
+|---|---|
+| `codex login status` | **Never refreshes** |
+| `account/rateLimits/read`, even with `last_refresh` 9 days old | **Never refreshes** |
+| app-server `account/read` with `refreshToken: true` | Refreshed **unconditionally**, both tokens rotated, ~10-day access token |
+
+Nothing renews the ~10-day access token on its own, so `scripts/refresh-codex-auth.sh` reads its expiry locally and only under three days remaining makes that one explicit refresh call — no model turn, no quota:
+
+```cron
+23 * * * * /srv/data/ai-usage-monitor/scripts/refresh-codex-auth.sh >> /srv/data/ai-usage-monitor/refresh-auth.log 2>&1
+```
+
+Exported Codex snapshots carry no refresh token at all and still expire after roughly ten days; use them only where the durable path is not possible.
 
 ## Docker deployment
 

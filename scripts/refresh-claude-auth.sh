@@ -22,13 +22,22 @@ remaining() {
     docker compose exec -T ai-usage-monitor python -c "
 import json, datetime
 o = json.load(open('$CRED'))['claudeAiOauth']
-print(int(o['expiresAt']/1000 - datetime.datetime.now(datetime.UTC).timestamp()))
+if not o.get('accessToken'):
+    print('logged-out')   # the CLI blanks the file when a refresh is rejected
+else:
+    print(int(o['expiresAt']/1000 - datetime.datetime.now(datetime.UTC).timestamp()))
 " 2>/dev/null | tr -d '\r'
 }
 
 REMAIN=$(remaining || true)
 if [ -z "${REMAIN:-}" ]; then
     echo "$(date -Is) ERROR: cannot read $CRED -- container down, or logged out"
+    exit 1
+fi
+
+if [ "$REMAIN" = logged-out ]; then
+    echo "$(date -Is) ERROR: logged out (grant revoked or refresh rejected) -- re-login needed:"
+    echo "    docker compose exec ai-usage-monitor claude auth login --claudeai"
     exit 1
 fi
 
