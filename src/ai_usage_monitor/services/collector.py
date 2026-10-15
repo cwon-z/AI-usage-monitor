@@ -4,13 +4,14 @@ import asyncio
 import logging
 import math
 import time
+import uuid
 from datetime import UTC, datetime
 
 from ai_usage_monitor.config.settings import Settings
 from ai_usage_monitor.models.schemas import ProviderUsage
 from ai_usage_monitor.providers.base import ProviderError, UsageProvider
 from ai_usage_monitor.services.history import HistoryRepository
-from ai_usage_monitor.services.logging import log_event
+from ai_usage_monitor.services.logging import cycle_id, log_event
 
 
 class Collector:
@@ -28,6 +29,7 @@ class Collector:
         self.logger = logging.getLogger(__name__)
 
     async def _collect_provider(self, provider: UsageProvider) -> bool:
+        started = time.monotonic()
         last_error = ProviderError("provider_failed")
         for attempt in range(self.settings.provider_retry_attempts):
             try:
@@ -50,9 +52,12 @@ class Collector:
                     self.repository.save_success, provider.name, usage
                 )
                 log_event(
-                    self.logger, "provider_collection_success", provider=provider.name
+                    self.logger,
+                    "provider_collection_success",
+                    provider=provider.name,
+                    duration_ms=round((time.monotonic() - started) * 1000),
+                    attempts=attempt + 1,
                 )
-                log_event(self.logger, "snapshot_saved", provider=provider.name)
                 return True
 
             if (
@@ -61,6 +66,15 @@ class Collector:
             ):
                 break
             delay = self.settings.provider_retry_base_seconds * (2**attempt)
+            log_event(
+                self.logger,
+                "provider_retry",
+                level=logging.WARNING,
+                provider=provider.name,
+                error_code=last_error.code,
+                attempt=attempt + 1,
+                retry_in_seconds=delay,
+            )
             if delay:
                 await asyncio.sleep(delay)
 
@@ -77,7 +91,13 @@ class Collector:
             else "provider_collection_failed"
         )
         log_event(
-            self.logger, event, provider=provider.name, error_code=last_error.code
+            self.logger,
+            event,
+            level=logging.WARNING,
+            provider=provider.name,
+            error_code=last_error.code,
+            attempts=attempt + 1,
+            duration_ms=round((time.monotonic() - started) * 1000),
         )
         return False
 
@@ -96,6 +116,31 @@ class Collector:
             await asyncio.gather(self._inflight, return_exceptions=True)
 
     async def _cycle(self) -> dict[str, bool]:
+        token = cycle_id.set(uuid.uuid4().hex)
+        started = time.monotonic()
+        try:
+            outcomes = await self._run_cycle()
+            log_event(
+                self.logger,
+                "collector_completed",
+                duration_ms=round((time.monotonic() - started) * 1000),
+                successful_providers=sum(outcomes.values()),
+                failed_providers=len(outcomes) - sum(outcomes.values()),
+            )
+            return outcomes
+        except Exception:
+            log_event(
+                self.logger,
+                "collection_cycle_failed",
+                level=logging.ERROR,
+                error_code="storage_unavailable",
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
+            raise
+        finally:
+            cycle_id.reset(token)
+
+    async def _run_cycle(self) -> dict[str, bool]:
         async with self._lock:
             log_event(self.logger, "collector_started")
             pairs = await asyncio.gather(
@@ -135,11 +180,6 @@ class CollectionScheduler:
                 self.last_cycle_ok = True
             except Exception:  # noqa: BLE001 — preserve the scheduling loop
                 self.last_cycle_ok = False
-                log_event(
-                    logging.getLogger(__name__),
-                    "collection_cycle_failed",
-                    error_code="storage_unavailable",
-                )
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
             except TimeoutError:

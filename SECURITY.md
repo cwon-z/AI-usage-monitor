@@ -5,7 +5,7 @@ repository does **not** mean its running API should be public.
 
 ## Reporting a vulnerability
 
-Use GitHub's **Security → Report a vulnerability** if private reporting is
+Use GitHub's **Security â†’ Report a vulnerability** if private reporting is
 enabled for this repository. If it is unavailable, open an issue requesting a
 private contact channel, without exploit details, credentials, or account data.
 Do not post authentication files, configured KWGT exports, database snapshots,
@@ -42,3 +42,11 @@ or unredacted logs. There is no guaranteed response SLA or formal support window
    latest commit does not remove it from history, forks, caches, or downloads.
 
 Automated checks are defense in depth, not proof that the code is vulnerability-free.
+
+## MCP access
+
+The optional `/mcp` transport requires a dedicated bearer token, explicit host
+allowlisting, and private-network or TLS access. The token grants usage reads and
+throttled collection, never provider credential access. Keep it separate from the
+widget token. Stateless requests are capped at 64 KiB. Cached quota checks are
+advisory, not reservations. See [MCP setup and boundaries](docs/mcp.md).

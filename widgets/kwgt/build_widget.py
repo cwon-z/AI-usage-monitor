@@ -1117,12 +1117,15 @@ def build(output: Path | None = None, variant="midnight", revision=1) -> Path:
             for name in ("NotoSansKR-Regular.ttf", "NotoSansKR-Medium.ttf"):
                 entries[f"fonts/{name}"] = (HERE / "assets" / name).read_bytes()
             for name in ("ATTRIBUTION.md", "OFL.txt"):
-                entries[f"licenses/{name}"] = (HERE / "assets" / name).read_bytes()
+                entries[f"licenses/{name}"] = (
+                    (HERE / "assets" / name).read_text(encoding="utf-8").encode("utf-8")
+                )
         for name in ("preset_thumb_portrait.jpg", "preset_thumb_landscape.jpg"):
             if variant != "render_test" and (HERE / (prefix + name)).is_file():
                 entries[name] = (HERE / (prefix + name)).read_bytes()
         for name, data in entries.items():
             info = zipfile.ZipInfo(name, date_time=(2026, 9, 10, 0, 0, 0))
+            info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)

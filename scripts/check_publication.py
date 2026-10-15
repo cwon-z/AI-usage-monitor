@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DIRS = {"secrets", "data", ".venv", ".claude", ".codex", "__pycache__"}
-PRIVATE_NAMES = {"auth.json", "widget-api-token", ".DS_Store"}
+PRIVATE_NAMES = {"auth.json", "widget-api-token", "mcp-api-token", ".DS_Store"}
 PRIVATE_SUFFIXES = {
     ".db",
     ".sqlite",

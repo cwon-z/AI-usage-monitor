@@ -20,6 +20,13 @@ class Settings(BaseSettings):
 
     widget_api_token: SecretStr = Field(min_length=16)
     widget_api_token_file: Path | None = None
+    mcp_enabled: bool = False
+    mcp_api_token: SecretStr | None = Field(default=None, min_length=16)
+    mcp_api_token_file: Path | None = None
+    mcp_allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost:*", "127.0.0.1:*", "[::1]:*"]
+    )
+    mcp_allowed_origins: list[str] = Field(default_factory=list)
     database_url: str = "sqlite:///./data/usage.db"
     collection_interval_seconds: int = Field(default=600, ge=30, le=86_400)
     retention_days: int = Field(default=30, ge=1, le=3_650)
@@ -51,24 +58,37 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def read_widget_token(cls, values):
-        path = values.get("widget_api_token_file")
-        if path and not values.get("widget_api_token"):
-            from ai_usage_monitor.providers.base import ProviderError
-            from ai_usage_monitor.providers.credentials import read_secret
+        from ai_usage_monitor.providers.base import ProviderError
+        from ai_usage_monitor.providers.credentials import read_secret
 
-            try:
-                values["widget_api_token"] = read_secret(
-                    Path(path).expanduser(), max_bytes=4096
-                )
-            except ProviderError as exc:
-                raise ValueError("widget token file is unavailable or invalid") from exc
+        for prefix in ("widget", "mcp"):
+            key = f"{prefix}_api_token"
+            path = values.get(f"{key}_file")
+            if path and not values.get(key):
+                try:
+                    values[key] = read_secret(Path(path).expanduser(), max_bytes=4096)
+                except ProviderError as exc:
+                    raise ValueError(
+                        f"{prefix} token file is unavailable or invalid"
+                    ) from exc
         return values
+
+    @model_validator(mode="after")
+    def validate_mcp(self):
+        if self.mcp_enabled and self.mcp_api_token is None:
+            raise ValueError("MCP requires a dedicated API token")
+        if self.mcp_api_token and self.mcp_api_token == self.widget_api_token:
+            raise ValueError("MCP and widget tokens must differ")
+        if self.mcp_enabled and not self.mcp_allowed_hosts:
+            raise ValueError("MCP requires an explicit host allowlist")
+        return self
 
     @field_validator(
         "claude_oauth_token_file",
         "claude_credentials_file",
         "codex_auth_file",
         "widget_api_token_file",
+        "mcp_api_token_file",
         mode="after",
     )
     @classmethod
@@ -83,12 +103,14 @@ class Settings(BaseSettings):
             raise ValueError("invalid log level")
         return normalized
 
-    @field_validator("widget_api_token")
+    @field_validator("widget_api_token", "mcp_api_token")
     @classmethod
-    def reject_placeholder_token(cls, value: SecretStr) -> SecretStr:
+    def reject_placeholder_token(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
         token = value.get_secret_value()
-        if any(c.isspace() for c in token) or len(token) > 4096:
-            raise ValueError("widget token must be a single non-whitespace value")
+        if any(not 33 <= ord(c) <= 126 for c in token) or len(token) > 4096:
+            raise ValueError("API token must contain printable ASCII without spaces")
         if token.lower().startswith("replace-with"):
             raise ValueError("replace the example widget API token")
         return value

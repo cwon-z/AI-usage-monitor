@@ -123,9 +123,14 @@ def main() -> None:
         print(
             "Access-token snapshots exported; source credentials unchanged. Existing widget token preserved."
         )
-        print(
-            f"For native Linux Docker, set APP_UID={os.getuid()} and APP_GID={os.getgid()} in .env before building."
-        )
+        if os.name == "posix":
+            print(
+                f"For native Linux Docker, set APP_UID={os.getuid()} and APP_GID={os.getgid()} in .env before building."
+            )
+        else:
+            print(
+                "Set APP_UID and APP_GID to the secrets owner on the Linux deployment host; protect Windows exports with your account ACL."
+            )
     except (ProviderError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
         code = (
             exc.code

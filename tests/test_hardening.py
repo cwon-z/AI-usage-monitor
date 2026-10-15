@@ -84,6 +84,14 @@ def test_secret_files_bounded_and_regular(tmp_path):
     file.write_text("x" * 100)
     with pytest.raises(ProviderError):
         read_secret(file, max_bytes=20)
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    with pytest.raises(ProviderError):
+        read_secret(directory)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX named pipes only")
+def test_secret_rejects_fifo_without_blocking(tmp_path):
     fifo = tmp_path / "fifo"
     os.mkfifo(fifo)
     with pytest.raises(ProviderError):
@@ -375,9 +383,11 @@ def test_export_command_preserves_source_and_widget(tmp_path, monkeypatch):
     provision_main()
     widget = (directory / "widget-api-token").read_bytes()
     assert len(widget) >= 32
-    assert (directory.stat().st_mode & 0o777) == 0o700
+    if os.name == "posix":
+        assert (directory.stat().st_mode & 0o777) == 0o700
     for file in directory.iterdir():
-        assert file.stat().st_mode & 0o777 == 0o600
+        if os.name == "posix":
+            assert file.stat().st_mode & 0o777 == 0o600
         assert b"DO-NOT-PASS-REFRESH" not in file.read_bytes()
     monkeypatch.setattr(sys, "argv", args + ["--replace-provider-snapshots"])
     provision_main()
@@ -389,7 +399,12 @@ def test_export_does_not_follow_symlinks(tmp_path):
     source = tmp_path / "source"
     source.write_text("preserve")
     target = tmp_path / "output"
-    target.symlink_to(source)
+    try:
+        target.symlink_to(source)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
     with pytest.raises(ValueError):
         atomic_secret(target, "new", replace=True)
     assert source.read_text() == "preserve"

@@ -148,7 +148,7 @@ class JSONLCommandClient:
             try:
                 await asyncio.wait_for(asyncio.shield(cleanup), timeout=1)
             except TimeoutError:
-                stop(signal.SIGKILL)
+                stop(getattr(signal, "SIGKILL", signal.SIGTERM))
                 try:
                     await asyncio.wait_for(asyncio.shield(cleanup), timeout=1)
                 except TimeoutError:

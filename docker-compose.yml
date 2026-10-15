@@ -9,6 +9,15 @@ services:
         APP_GID: ${APP_GID:-10001}
     image: ai-usage-monitor:local
     restart: unless-stopped
+    init: true
+    mem_limit: 768m
+    pids_limit: 128
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - ${ENV_FILE:-.env}
     ports:
