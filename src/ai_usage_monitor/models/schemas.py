@@ -92,6 +92,7 @@ class ProviderResult(ProviderUsage):
     last_attempt_at: AwareDatetime | None = None
     status: ProviderStatus
     stale: bool = False
+    stale_reasons: list[str] = Field(default_factory=list)
     error: str | None = Field(default=None, max_length=100)
 
 
@@ -104,6 +105,8 @@ class UsageResponse(BaseModel):
 class CompactProvider(BaseModel):
     status: ProviderStatus
     stale: bool
+    stale_reasons: list[str] = Field(default_factory=list)
+    last_attempt_at: AwareDatetime | None = None
     error: str | None = None
     collected_at: AwareDatetime | None = None
     session: int | None = None

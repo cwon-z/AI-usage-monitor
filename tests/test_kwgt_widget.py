@@ -24,7 +24,25 @@ SERVER = "https://homelab.example.ts.net"
 
 def test_shipped_r7_matches_reproducible_build(tmp_path):
     rebuilt = builder.build(tmp_path / "r7.kwgt", variant="oneui_3x2", revision=7)
-    assert rebuilt.read_bytes() == (WIDGET / "AI_Usage_OneUI_3x2_R7.kwgt").read_bytes()
+    repeated = builder.build(
+        tmp_path / "r7-repeat.kwgt", variant="oneui_3x2", revision=7
+    )
+    assert rebuilt.read_bytes() == repeated.read_bytes()
+    # Different zlib versions can encode identical content differently. Compare
+    # the shipped payload and stable metadata, not compression implementation.
+    with (
+        zipfile.ZipFile(rebuilt) as actual,
+        zipfile.ZipFile(WIDGET / "AI_Usage_OneUI_3x2_R7.kwgt") as expected,
+    ):
+        assert actual.namelist() == expected.namelist()
+        for name in actual.namelist():
+            assert actual.read(name) == expected.read(name)
+            a, b = actual.getinfo(name), expected.getinfo(name)
+            assert (a.date_time, a.create_system, a.external_attr) == (
+                b.date_time,
+                b.create_system,
+                b.external_attr,
+            )
 
 
 def payload():

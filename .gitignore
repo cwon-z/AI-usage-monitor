@@ -23,6 +23,7 @@ auth.json
 *-auth.json
 *credentials*.json
 widget-api-token
+mcp-api-token
 *.pem
 *.key
 *.p12

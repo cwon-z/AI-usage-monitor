@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
@@ -25,6 +25,7 @@ from ai_usage_monitor.services.collector import (
 )
 from ai_usage_monitor.services.history import HistoryRepository
 from ai_usage_monitor.services.logging import configure_logging
+from ai_usage_monitor.services.usage import UsageService
 
 
 def create_app(
@@ -63,7 +64,10 @@ def create_app(
         if scheduler is not None:
             scheduler.start()
         try:
-            yield
+            async with AsyncExitStack() as stack:
+                if resolved.mcp_enabled:
+                    await stack.enter_async_context(app.state.mcp.session_manager.run())
+                yield
         finally:
             if scheduler is not None:
                 await scheduler.stop()
@@ -72,7 +76,7 @@ def create_app(
 
     app = FastAPI(
         title="AI Usage Monitor",
-        version="0.1.0",
+        version="0.2.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -129,6 +133,13 @@ def create_app(
     ]
     app.include_router(health_router)
     app.include_router(usage_router)
+    app.state.usage_service = UsageService(app.state)
+    if resolved.mcp_enabled:
+        from ai_usage_monitor.api.mcp import create_mcp
+
+        server, transport = create_mcp(app.state.usage_service, resolved)
+        app.state.mcp = server
+        app.mount("/", transport)
 
     @app.middleware("http")
     async def private_responses(request, call_next):

@@ -2,6 +2,9 @@
 
 A small self-hosted FastAPI backend for Claude and OpenAI/Codex subscription quotas. Android, Tasker/KWGT, and dashboards receive only normalized usage and use a separate widget API token.
 
+AI clients can query remaining quota through the optional authenticated
+[MCP server](docs/mcp.md), using a dedicated token and the same cached data.
+
 Experimental, single-user software. Keep the running API private even if the
 source is public. Read [security boundaries](SECURITY.md),
 [contributing/checks](CONTRIBUTING.md), and the [publication review](docs/publication-review.md).
@@ -129,7 +132,9 @@ Use **one application worker/replica per database**. Collection scheduling and m
 
 ## API contract
 
-Except health, every API endpoint requires `Authorization: Bearer <widget-token>`. Responses are `Cache-Control: no-store`; interactive docs and unauthenticated OpenAPI are disabled.
+Every `/api/v1` endpoint except health requires `Authorization: Bearer <widget-token>`.
+MCP uses its own dedicated token. Responses are `Cache-Control: no-store`;
+interactive docs and unauthenticated OpenAPI are disabled.
 
 | Endpoint | Behavior |
 |---|---|
@@ -139,6 +144,8 @@ Except health, every API endpoint requires `Authorization: Bearer <widget-token>
 | `GET /api/v1/providers` | Enabled/configured state and interface classification; no paths |
 | `POST /api/v1/usage/refresh` | 200 on all successes, 207 on provider failures, 429 with Retry-After when throttled, 503 for storage failure |
 | `GET /api/v1/health` | Public infrastructure health; 503 for database/scheduler failure |
+| `GET /api/v1/ready` | Authenticated quota readiness; 503 when an enabled provider is unavailable or stale |
+| `/mcp` | Optional Streamable HTTP MCP; separate bearer token, see [setup](docs/mcp.md) |
 
 Quota fields include `used_percent`, `remaining_percent`, `reset_at`, `window_minutes`, `source`, and optional `pace`. Utilization may exceed 100 if upstream reports an overage; remaining percentage is clamped at zero. All timestamps are timezone-aware UTC.
 

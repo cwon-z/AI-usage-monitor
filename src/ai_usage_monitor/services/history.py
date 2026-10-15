@@ -147,6 +147,7 @@ class HistoryRepository:
                     status="unavailable",
                     stale=True,
                     error="not_collected",
+                    stale_reasons=["not_collected"],
                     capabilities=ProviderCapabilities(),
                     collected_at=None,
                 )
@@ -158,6 +159,9 @@ class HistoryRepository:
                     status="error" if record.last_error else "unavailable",
                     stale=True,
                     error=record.last_error or "not_collected",
+                    stale_reasons=[
+                        "collection_failed" if record.last_error else "not_collected"
+                    ],
                     capabilities=ProviderCapabilities(),
                     collected_at=None,
                     last_attempt_at=attempted_at,
@@ -171,6 +175,7 @@ class HistoryRepository:
                     status="error",
                     stale=True,
                     error="cached_data_invalid",
+                    stale_reasons=["cached_data_invalid"],
                     capabilities=ProviderCapabilities(),
                     collected_at=None,
                     last_attempt_at=attempted_at,
@@ -193,7 +198,16 @@ class HistoryRepository:
                 and window.reset_at <= current
                 for window in windows
             )
-            stale = bool(record.last_error) or age >= stale_after_seconds or expired
+            reasons = []
+            if record.last_error:
+                reasons.append("collection_failed")
+            if age < 0:
+                reasons.append("clock_skew")
+            if age >= stale_after_seconds:
+                reasons.append("sample_too_old")
+            if expired:
+                reasons.append("reset_elapsed")
+            stale = bool(reasons)
             paced = add_pacing(usage, now=usage.collected_at)
             if stale:
                 for window in [
@@ -208,6 +222,7 @@ class HistoryRepository:
                 **paced.model_dump(),
                 status="error" if record.last_error else "ok",
                 stale=stale,
+                stale_reasons=reasons,
                 error=record.last_error,
                 last_attempt_at=attempted_at,
             )

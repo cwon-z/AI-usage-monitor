@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-usage-monitor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-hosted normalized Claude and Codex subscription usage API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "mcp>=2.3,<3",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "sqlalchemy>=2.0,<3",

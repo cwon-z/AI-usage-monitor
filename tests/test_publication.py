@@ -26,6 +26,7 @@ def test_standalone_server_is_private_by_default(monkeypatch):
     "name",
     [
         "secrets/token",
+        "mcp-api-token",
         ".env",
         ".env.prod",
         "copy/codex-auth.json",

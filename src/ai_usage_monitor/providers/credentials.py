@@ -16,7 +16,12 @@ from .base import ProviderError
 
 def read_secret(path: Path, *, max_bytes: int = 1_000_000) -> str:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(path.stat().st_mode):
+            raise ProviderError("authentication_invalid")
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0),
+        )
         with os.fdopen(fd, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ProviderError("authentication_invalid")

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -14,19 +12,14 @@ from ai_usage_monitor.models.schemas import (
     ProvidersResponse,
     UsageResponse,
 )
-from ai_usage_monitor.services.logging import log_event
 from ai_usage_monitor.services.normalizer import format_reset_in, utc_now
+from ai_usage_monitor.services.usage import RefreshThrottled, StorageUnavailable
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_token)])
-logger = logging.getLogger(__name__)
 
 
 def _full_usage(request: Request) -> UsageResponse:
-    return request.app.state.repository.get_usage_response(
-        request.app.state.provider_names,
-        stale_after_seconds=request.app.state.settings.stale_after_seconds,
-        disabled_providers=request.app.state.disabled_providers,
-    )
+    return request.app.state.usage_service.read()
 
 
 @router.get("/usage", response_model=UsageResponse)
@@ -38,6 +31,8 @@ def _compact_provider(result, *, claude: bool, now: datetime) -> CompactProvider
     return CompactProvider(
         status=result.status,
         stale=result.stale,
+        stale_reasons=result.stale_reasons,
+        last_attempt_at=result.last_attempt_at,
         error=result.error,
         collected_at=result.collected_at,
         session=round(result.session.remaining_percent)
@@ -117,18 +112,38 @@ def get_providers(request: Request) -> ProvidersResponse:
 
 @router.post("/usage/refresh", response_model=UsageResponse)
 async def refresh_usage(request: Request, response: Response) -> UsageResponse:
-    retry_after = await request.app.state.refresh_limiter.claim()
-    if retry_after is not None:
+    try:
+        usage, all_ok = await request.app.state.usage_service.refresh()
+    except RefreshThrottled as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="manual_refresh_rate_limited",
-            headers={"Retry-After": str(retry_after)},
-        )
-    log_event(logger, "manual_refresh")
-    try:
-        outcomes = await request.app.state.collector.collect_all()
-    except Exception:  # noqa: BLE001 — never expose storage/driver details
-        log_event(logger, "collection_cycle_failed", error_code="storage_unavailable")
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from None
+    except StorageUnavailable:
         raise HTTPException(status_code=503, detail="storage_unavailable") from None
-    response.status_code = 200 if all(outcomes.values()) else 207
-    return await asyncio.to_thread(_full_usage, request)
+    response.status_code = 200 if all_ok else 207
+    return usage
+
+
+@router.get("/ready")
+def readiness(request: Request, response: Response) -> dict:
+    """Authenticated provider readiness, separate from infrastructure liveness."""
+    usage = _full_usage(request)
+    providers = {
+        name: {
+            "status": value.status,
+            "stale": value.stale,
+            "stale_reasons": value.stale_reasons,
+            "error": value.error,
+            "collected_at": value.collected_at,
+            "last_attempt_at": value.last_attempt_at,
+        }
+        for name, value in usage.providers.items()
+        if name not in request.app.state.disabled_providers
+    }
+    ready = all(
+        value["status"] == "ok" and not value["stale"] for value in providers.values()
+    )
+    response.status_code = 200 if ready else 503
+    return {"status": "ready" if ready else "degraded", "providers": providers}
