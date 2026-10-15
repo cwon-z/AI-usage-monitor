@@ -25,13 +25,31 @@ Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
 class MCPAuthentication:
     """Authenticate before the SDK reads a body or dispatches any MCP method."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, settings=None):
         self.app, self.token = app, token
+        self.access = None
+        self.public_host = settings.mcp_public_host if settings else ""
+        if settings and settings.mcp_access_team:
+            from ai_usage_monitor.api.access import AccessVerifier
+
+            self.access = AccessVerifier(settings)
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and not valid_bearer(
-            Headers(scope=scope).get("authorization", ""), self.token
-        ):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        public = (
+            bool(self.public_host)
+            and headers.get("host", "").lower().split(":")[0] == self.public_host
+        ) or "cf-access-jwt-assertion" in headers or "cf-connecting-ip" in headers
+        if public:
+            authorized = bool(self.access) and await asyncio.to_thread(
+                self.access.verify, headers.get("cf-access-jwt-assertion", "")
+            )
+        else:
+            authorized = valid_bearer(headers.get("authorization", ""), self.token)
+        if not authorized:
             response = JSONResponse(
                 {"detail": "unauthorized"},
                 status_code=401,
@@ -193,5 +211,5 @@ def create_mcp(service, settings):
         ),
     )
     return server, MCPAuthentication(
-        transport, settings.mcp_api_token.get_secret_value()
+        transport, settings.mcp_api_token.get_secret_value(), settings
     )

@@ -109,3 +109,25 @@ memory, and process count. Increase those limits deliberately if other operation
 CLI work inside the container requires more resources.
 
 Implementation follows the [official SDK ASGI integration](https://py.sdk.modelcontextprotocol.io/run/asgi/).
+
+## Cloudflare Access for hosted clients
+
+The public MCP hostname can use Cloudflare Managed OAuth. The origin independently
+verifies `Cf-Access-Jwt-Assertion` (RS256 signature, issuer, audience, expiry, and
+an explicit email allowlist). Configure:
+
+```dotenv
+MCP_PUBLIC_HOST=ai-usage-mcp.example.com
+MCP_ACCESS_TEAM=your-team.cloudflareaccess.com
+MCP_ACCESS_AUD=your-access-application-audience
+MCP_ACCESS_EMAILS=["owner@example.com"]
+```
+
+Add the public hostname to `MCP_ALLOWED_HOSTS`. Public-host requests and requests
+carrying Cloudflare headers require a valid Access JWT; the private MCP bearer
+cannot bypass that requirement. Missing Access configuration fails closed.
+Private calls continue using the dedicated bearer. REST keeps its widget token.
+Create the Access application and owner-only policy before publishing DNS; proxy
+only `/mcp` to the origin, preserving Host and streaming without buffering.
+
+JWT validation follows [Cloudflare's origin validation guidance](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).

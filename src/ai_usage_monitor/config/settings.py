@@ -27,6 +27,10 @@ class Settings(BaseSettings):
         default_factory=lambda: ["localhost:*", "127.0.0.1:*", "[::1]:*"]
     )
     mcp_allowed_origins: list[str] = Field(default_factory=list)
+    mcp_access_team: str = ""
+    mcp_access_aud: str = ""
+    mcp_access_emails: list[str] = Field(default_factory=list)
+    mcp_public_host: str = ""
     database_url: str = "sqlite:///./data/usage.db"
     collection_interval_seconds: int = Field(default=600, ge=30, le=86_400)
     retention_days: int = Field(default=30, ge=1, le=3_650)
@@ -94,6 +98,15 @@ class Settings(BaseSettings):
     @classmethod
     def expand_paths(cls, value: Path | None) -> Path | None:
         return value.expanduser() if value is not None else None
+
+    @field_validator("mcp_access_team")
+    @classmethod
+    def validate_access_team(cls, value: str) -> str:
+        import re
+
+        if value and not re.fullmatch(r"[a-z0-9-]+\.cloudflareaccess\.com", value):
+            raise ValueError("Access team must be a Cloudflare Access team hostname")
+        return value
 
     @field_validator("log_level")
     @classmethod
