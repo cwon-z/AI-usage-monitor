@@ -41,12 +41,14 @@ Each workflow was a single job, which stops at its first failing step.
   step, the dependency audit (finding 2). Bandit, Gitleaks and the publication
   check after it did not run.
 - **Verify** has failed since the pushes of 2026-11-23, at the formatting check
-  on four files changed with the Cloudflare Access work. The lock check, image
-  build and both smoke tests after it did not run.
+  on four files those pushes brought in. The lock check, image build and both
+  smoke tests after it did not run.
 
-The commits pushed on 2026-11-23 were therefore not secret-scanned or built in
-CI. A Gitleaks scan of every commit on every branch, run for this audit, is
-clean. Each check is now a separate job, so one failure cannot hide another.
+The commits that reached `main` on 2026-11-23, which include the host scripts
+and the Cloudflare Access verification, were therefore not secret-scanned or
+built in CI. A Gitleaks scan of every commit on every branch, run for this
+audit, is clean. Each check is now a separate job, so one failure cannot hide
+another.
 
 ### 2. Known advisory in a locked dependency
 
