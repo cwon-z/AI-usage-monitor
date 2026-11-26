@@ -9,7 +9,8 @@ services:
     # The base file publishes 127.0.0.1:8000, which is unreachable from a
     # phone and collides with anything else already on 8000. Bind a private
     # interface (Tailscale, WireGuard, LAN) instead. `!override` replaces the
-    # base list rather than appending to it.
+    # base list rather than appending to it. Tell scripts/auth-watchdog.py
+    # the new address through state/api-url.
     ports: !override
       - "203.0.113.10:9010:8000"
 
@@ -17,7 +18,8 @@ services:
       # Required only for the durable auth path in the README, where the
       # deployment holds its own Claude login instead of an exported snapshot.
       # The whole home is persisted because Claude Code writes both
-      # ~/.claude/.credentials.json and ~/.claude.json.
+      # ~/.claude/.credentials.json and ~/.claude.json. The base file mounts
+      # the root filesystem read-only, so a CLI login cannot work without it.
       - app-home:/home/app
 
 volumes:
