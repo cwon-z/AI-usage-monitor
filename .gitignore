@@ -44,3 +44,4 @@ dist/
 .uv-cache/
 *.bak
 *.swp
+*.tar

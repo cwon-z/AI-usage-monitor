@@ -6,7 +6,9 @@ contacts providers, opens ignored credentials, stages files, or changes Git.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -39,6 +41,40 @@ def path_problems(name: str) -> list[str]:
         )
     )
     return ["private/runtime file must not be published"] if private else []
+
+
+# Host addresses only: a trailing "/" marks a CIDR range such as the ones below.
+IPV4 = re.compile(rb"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d./])")
+# RFC 1918 plus the shared range that overlay networks such as Tailscale use.
+PRIVATE_NETWORKS = [
+    ipaddress.ip_network(network)
+    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10")
+]
+ADDRESS_SUFFIXES = {".py", ".sh", ".md", ".yml", ".yaml", ".toml", ".example", ".txt"}
+ADDRESS_NAMES = {"Dockerfile", ".dockerignore", ".gitignore"}
+
+
+def address_problems(path: Path) -> list[str]:
+    """Flag private IPv4 literals: one deployment's address is not a public default.
+
+    Documentation ranges and loopback pass. Tests are exempt because their
+    fixtures are synthetic; see main().
+    """
+    if path.suffix not in ADDRESS_SUFFIXES and path.name not in ADDRESS_NAMES:
+        return []
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return ["unreadable file"]
+    lines = set()
+    for match in IPV4.finditer(data):
+        try:
+            address = ipaddress.ip_address(match.group().decode())
+        except ValueError:
+            continue
+        if any(address in network for network in PRIVATE_NETWORKS):
+            lines.add(data.count(b"\n", 0, match.start()) + 1)
+    return [f"private network address on line {line}" for line in sorted(lines)]
 
 
 def widget_problems(path: Path) -> list[str]:
@@ -90,6 +126,8 @@ def main() -> int:
             problems.append("symlink requires manual publication review")
         elif path.is_file() and path.suffix == ".kwgt":
             problems.extend(widget_problems(path))
+        elif path.is_file() and not name.startswith("tests/"):
+            problems.extend(address_problems(path))
         failures.extend(f"{name}: {problem}" for problem in problems)
     if failures:
         print("Publication check FAILED (contents redacted):")

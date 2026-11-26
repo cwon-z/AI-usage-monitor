@@ -1,14 +1,32 @@
 version: 2
+# Version updates wait a week after release, so a compromised or withdrawn
+# release is usually caught before it is proposed here, and arrive as one
+# pull request per ecosystem instead of one per package. Security updates
+# are not delayed by the cooldown.
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

@@ -22,6 +22,14 @@ MaxAge = Annotated[int, Field(ge=1, le=86400)]
 Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
 
 
+# Access verification can block on a signing-key fetch (up to its timeout while
+# the endpoint is unreachable) and runs before authentication succeeds. Capping
+# it keeps unauthenticated requests from occupying the shared worker threads
+# that collection and storage also use. Verification with cached keys is
+# sub-millisecond, so a single-user deployment never reaches the cap.
+MAX_CONCURRENT_ACCESS_CHECKS = 2
+
+
 class MCPAuthentication:
     """Authenticate before the SDK reads a body or dispatches any MCP method."""
 
@@ -29,23 +37,51 @@ class MCPAuthentication:
         self.app, self.token = app, token
         self.access = None
         self.public_host = settings.mcp_public_host if settings else ""
+        self._access_checks = 0
         if settings and settings.mcp_access_team:
             from ai_usage_monitor.api.access import AccessVerifier
 
             self.access = AccessVerifier(settings)
 
+    async def _verify_access(self, assertion: str) -> bool:
+        if self.access is None or self._access_checks >= MAX_CONCURRENT_ACCESS_CHECKS:
+            return False
+        loop = asyncio.get_running_loop()
+
+        def release() -> None:
+            self._access_checks -= 1
+
+        def verify() -> bool:
+            # Released when the thread really finishes: a cancelled request
+            # stops waiting, but its thread keeps running until then.
+            try:
+                return self.access.verify(assertion)
+            finally:
+                loop.call_soon_threadsafe(release)
+
+        self._access_checks += 1
+        return await asyncio.to_thread(verify)
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
             return
+        if scope["type"] != "http":
+            # MCP is served over HTTP only. Refuse any other transport here
+            # instead of relying on the wrapped application to reject it.
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            return
         headers = Headers(scope=scope)
+        host = headers.get("host", "").lower().split(":")[0].rstrip(".")
         public = (
-            bool(self.public_host)
-            and headers.get("host", "").lower().split(":")[0] == self.public_host
-        ) or "cf-access-jwt-assertion" in headers or "cf-connecting-ip" in headers
+            (bool(self.public_host) and host == self.public_host)
+            or "cf-access-jwt-assertion" in headers
+            or "cf-connecting-ip" in headers
+        )
         if public:
-            authorized = bool(self.access) and await asyncio.to_thread(
-                self.access.verify, headers.get("cf-access-jwt-assertion", "")
+            authorized = await self._verify_access(
+                headers.get("cf-access-jwt-assertion", "")
             )
         else:
             authorized = valid_bearer(headers.get("authorization", ""), self.token)

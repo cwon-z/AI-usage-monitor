@@ -5,7 +5,7 @@ repository does **not** mean its running API should be public.
 
 ## Reporting a vulnerability
 
-Use GitHub's **Security â†’ Report a vulnerability** if private reporting is
+Use GitHub's **Security → Report a vulnerability** if private reporting is
 enabled for this repository. If it is unavailable, open an issue requesting a
 private contact channel, without exploit details, credentials, or account data.
 Do not post authentication files, configured KWGT exports, database snapshots,
@@ -26,6 +26,9 @@ or unredacted logs. There is no guaranteed response SLA or formal support window
   widget token and cached account usage. Never publish an exported personal preset.
 - Provider credential formats and Claude's undocumented endpoint may change.
   CLI binaries are trusted dependencies, not sandboxed untrusted plugins.
+- The host scripts under `scripts/` run outside the container with access to
+  Docker and the widget token. Keep `state/` and `secrets/` at 0700 with 0600
+  files, and keep one deployment's addresses out of committed defaults.
 
 ## Before publishing or releasing
 
@@ -37,7 +40,9 @@ or unredacted logs. There is no guaranteed response SLA or formal support window
 3. Enable repository secret scanning/push protection and private vulnerability
    reporting where available. Enable required CI checks and review dependency PRs.
 4. Audit the final container, including OS packages, Node and provider CLIs;
-   Python dependency auditing alone does not cover the image.
+   Python dependency auditing alone does not cover the image. The Security
+   workflow scans the built image on every push and weekly, and fails on high
+   or critical vulnerabilities that have a fix.
 5. If a secret was committed, revoke/rotate it first. Removing a file from the
    latest commit does not remove it from history, forks, caches, or downloads.
 

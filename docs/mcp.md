@@ -126,6 +126,10 @@ MCP_ACCESS_EMAILS=["owner@example.com"]
 Add the public hostname to `MCP_ALLOWED_HOSTS`. Public-host requests and requests
 carrying Cloudflare headers require a valid Access JWT; the private MCP bearer
 cannot bypass that requirement. Missing Access configuration fails closed.
+`MCP_PUBLIC_HOST` is a bare hostname, compared without regard to case: a value
+with a scheme, port or path is rejected at startup because it could never match.
+At most two Access verifications run at once, so requests that fail the check
+cannot occupy the worker threads collection uses; extra ones receive 401.
 Private calls continue using the dedicated bearer. REST keeps its widget token.
 Create the Access application and owner-only policy before publishing DNS; proxy
 only `/mcp` to the origin, preserving Host and streaming without buffering.

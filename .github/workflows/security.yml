@@ -6,24 +6,48 @@ on:
     - cron: '17 4 * * 1'
 permissions:
   contents: read
+# Separate jobs so every scan reports on every run. As one job, a single
+# dependency advisory stopped the static analysis and secret scans behind it.
 jobs:
-  scan:
+  dependencies:
+    name: Python dependency advisories
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
       - name: Audit runtime and test dependencies
         run: |
           uv export --frozen --extra dev --no-emit-project --no-hashes --format requirements-txt --output-file "$RUNNER_TEMP/audit.txt"
           uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/audit.txt" --no-deps --disable-pip
-      - name: Static security analysis
-        run: uvx bandit==1.9.4 -r src -ll
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: '3.14'
+      # The host scripts handle the widget token and alert URLs, so scan them too.
+      - run: uvx bandit==1.9.4 -r src scripts -ll
+
+  secrets:
+    name: Secrets and publication hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install checksum-pinned secret scanner
         run: |
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$RUNNER_TEMP/gitleaks.tar.gz"
@@ -33,5 +57,25 @@ jobs:
         run: |
           "$RUNNER_TEMP/gitleaks" dir . --redact --max-archive-depth 2
           "$RUNNER_TEMP/gitleaks" git . --redact --log-opts="--all"
-      - name: Reject private paths and configured widget exports
-        run: python scripts/check_publication.py
+      - name: Reject private paths, addresses and configured widget exports
+        run: python3 scripts/check_publication.py
+
+  image:
+    name: Container image vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Trivy, pinned by digest. It receives the image as a read-only archive:
+      # no Docker socket, no checkout and no credentials.
+      SCANNER: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t ai-usage-monitor:scan .
+      - name: Fail on high or critical vulnerabilities that have a fix
+        run: |
+          docker save ai-usage-monitor:scan --output "$RUNNER_TEMP/image.tar"
+          docker run --rm --volume "$RUNNER_TEMP/image.tar:/image.tar:ro" "$SCANNER" \
+            image --input /image.tar --scanners vuln --ignore-unfixed \
+            --severity HIGH,CRITICAL --exit-code 1 --no-progress

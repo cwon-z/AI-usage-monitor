@@ -7,7 +7,8 @@ AI clients can query remaining quota through the optional authenticated
 
 Experimental, single-user software. Keep the running API private even if the
 source is public. Read [security boundaries](SECURITY.md),
-[contributing/checks](CONTRIBUTING.md), and the [publication review](docs/publication-review.md).
+[contributing/checks](CONTRIBUTING.md), and the latest
+[security audit](docs/security-audit-2026-11-26.md).
 
 ## Architecture and interfaces
 
@@ -53,7 +54,7 @@ then point the adapter at that credential file rather than the export:
 CLAUDE_CREDENTIALS_FILE=/home/app/.claude/.credentials.json
 ```
 
-This needs a persistent home so the login survives container recreation; `docker-compose.override.yml.example` shows the named volume (`app-home` at `/home/app`). Claude Code writes both `~/.claude/.credentials.json` and `~/.claude.json`, so the whole home is persisted, not just `.claude/`. No adapter change is involved: the file has the same shape as an export, and refresh credentials are still stripped before any request.
+This needs a persistent home so the login survives container recreation; `docker-compose.override.yml.example` shows the named volume (`app-home` at `/home/app`). The container's root filesystem is read-only, so without that volume the login fails outright rather than working until the next recreation. Claude Code writes both `~/.claude/.credentials.json` and `~/.claude.json`, so the whole home is persisted, not just `.claude/`. No adapter change is involved: the file has the same shape as an export, and refresh credentials are still stripped before any request.
 
 Renewal has to be driven deliberately, because of how the pinned CLI behaves. Measured against Claude Code 2.1.266:
 
@@ -108,6 +109,8 @@ Renewal cannot survive a revoked grant, and nothing in the service reports one: 
 ```
 
 It needs `state/kuma-push-url` and, optionally, `state/discord-webhook` (both mode 600, ignored by Git). A provider counts as down when its error is `authentication_*`, or when it is stale for any other reason.
+
+The watchdog calls the API on the base Compose file's loopback port, `http://127.0.0.1:8000/api/v1`. If your deployment publishes a different address, for example through the override file, put its base URL in `state/api-url` (or `AI_USAGE_API`), or the watchdog will report the API unreachable. The widget token is sent there, so use `https` unless the address is loopback or inside an encrypted private network. `state/ssh-host` (or `AI_USAGE_SSH_HOST`) sets the host name shown in the re-login commands; it defaults to the machine's hostname. Only `http(s)` URLs are opened, and the Discord webhook must be `https`.
 
 When the Codex login is dead, the watchdog also starts a device login and posts the link and code to Discord, so re-login is one approval from a phone. Without a webhook, the code rides in the Kuma alert instead. A fresh code is offered every 3 hours (`CODEX_LOGIN_REOFFER_SECONDS`) while the login stays dead, or on demand with `--codex-login`. The login runs in a staging `CODEX_HOME` and replaces the live `auth.json` only once approved, because `codex login` deletes the existing file the moment it starts. Logging in in place would destroy a working grant on a false alarm. On approval it requests an immediate collection.
 
@@ -176,7 +179,7 @@ Requires Docker with Compose v2; Python 3.12+ and uv on the trusted machine used
 
    Initial collection is asynchronous. Check each enabled provider's `status`, `error`, and `collected_at`; HTTP 200 from a cached read alone does not prove provider authentication works.
 
-Compose publishes only `127.0.0.1:8000`, drops all capabilities, sets `no-new-privileges`, uses a bounded temporary filesystem, and persists SQLite in a named volume. It mounts only the dedicated export directory read-only, never your home. Use Tailscale or a carefully configured TLS reverse proxy for phone access; public exposure is not configured.
+Compose publishes only `127.0.0.1:8000`, drops all capabilities, sets `no-new-privileges`, mounts the root filesystem read-only with a bounded temporary filesystem, and persists SQLite in a named volume. The image carries the Python runtime, Node and the two pinned CLIs, without pip or npm. It mounts only the dedicated export directory read-only, never your home. Use Tailscale or a carefully configured TLS reverse proxy for phone access; public exposure is not configured.
 
 **Existing volume ownership:** if you change runtime UID/GID on a previously deployed instance, migrate ownership of that deployment's data volume before starting the new image. Back it up first. Do not delete the volume to fix permissions.
 
@@ -303,7 +306,7 @@ These values are **remaining** quota: 100 is a fresh window and 0 is exhausted, 
 
 To update snapshots, rerun the export command with `--replace-provider-snapshots`. To rotate the widget token, replace its file securely and restart the service: the backend token is loaded at startup. If credentials are exposed, revoke them through the provider's normal security controls.
 
-Back up SQLite with its online backup API or stop the service before copying the database and associated WAL files. Pruning deletes old snapshots, not the last successful cached provider state. If you need to erase retained account data, remove it through a deliberate database maintenance operation after backup.
+A newly created database, its WAL files and a newly created data directory are readable by their owner only; existing ones keep their modes. Back up SQLite with its online backup API or stop the service before copying the database and associated WAL files. Pruning deletes old snapshots, not the last successful cached provider state. If you need to erase retained account data, remove it through a deliberate database maintenance operation after backup.
 
 ## Development and verification
 
@@ -326,11 +329,11 @@ The default local credential file paths can also be read directly: the adapters 
 
 The test suite covers normal and malformed payloads, real subprocess pipes/deadlines, missing/expired credentials, no-refresh export, secret permissions, SQLite threading/history pagination, scheduler recovery, refresh coalescing, cache semantics, authentication, health, and sanitized storage failures. Network calls use mocks in automated tests.
 
-Runtime dependencies are frozen in `uv.lock` and exported `requirements.lock`; Docker installs under those exact constraints. After an intentional dependency update, regenerate constraints:
+Runtime dependencies are frozen in `uv.lock` and exported, with hashes, to `requirements.lock`; Docker installs exactly those versions and rejects any download whose hash does not match. After an intentional dependency update, regenerate both:
 
 ```bash
 uv lock
-uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file requirements.lock
+uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file requirements.lock
 uv sync --frozen --extra dev
 uv run --frozen pytest
 docker compose build

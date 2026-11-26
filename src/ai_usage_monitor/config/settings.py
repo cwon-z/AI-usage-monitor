@@ -108,6 +108,19 @@ class Settings(BaseSettings):
             raise ValueError("Access team must be a Cloudflare Access team hostname")
         return value
 
+    @field_validator("mcp_public_host")
+    @classmethod
+    def validate_public_host(cls, value: str) -> str:
+        import re
+
+        # Compared with the request's Host header to decide that a request is
+        # public and must carry an Access JWT. A value that could never match
+        # (wrong case, a scheme, a port, a path) would silently disable that.
+        host = value.strip().lower().rstrip(".")
+        if host and not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", host):
+            raise ValueError("MCP public host must be a bare hostname")
+        return host
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, value: str) -> str:

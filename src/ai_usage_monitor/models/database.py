@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -42,11 +43,26 @@ class SnapshotRecord(Base):
     window_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+def _prepare_sqlite_file(path: Path) -> None:
+    """Create a new database readable by its owner only.
+
+    SQLite gives its WAL and shared-memory sidecars the mode of the main file,
+    so the file must exist with the right mode before the first connection.
+    An existing database or directory keeps whatever mode the operator set.
+    """
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError:
+        # Already present, or not creatable; SQLite reports the latter itself.
+        pass
+
+
 def create_database(database_url: str):
     url = make_url(database_url)
     memory = url.database == ":memory:"
     if not memory and url.database:
-        Path(url.database).parent.mkdir(parents=True, exist_ok=True)
+        _prepare_sqlite_file(Path(url.database))
     connect_args = (
         {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     )

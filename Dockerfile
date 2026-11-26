@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS cli
+FROM node:24-trixie-slim AS cli
 
 ARG CLAUDE_CODE_VERSION=2.1.266
 ARG CODEX_VERSION=0.150.1
@@ -6,7 +6,7 @@ RUN npm install --global --omit=dev \
     "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     "@openai/codex@${CODEX_VERSION}"
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-trixie
 
 ARG APP_UID=10001
 ARG APP_GID=10001
@@ -15,12 +15,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/usr/local/bin:${PATH}"
 
+# Upgrade first: the base tag can trail Debian security updates by days.
 RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends ca-certificates libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
+# Only the runtime and the two CLIs. npm and corepack are build tools that
+# bring their own advisories and have no use in the running container.
 COPY --from=cli /usr/local/bin/node /usr/local/bin/node
-COPY --from=cli /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=cli /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
+COPY --from=cli /usr/local/lib/node_modules/@openai /usr/local/lib/node_modules/@openai
 RUN ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
     && ln -s /usr/local/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
     && test "$APP_UID" -gt 0 && test "$APP_GID" -gt 0 \
@@ -32,7 +37,13 @@ RUN ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /
 WORKDIR /app
 COPY pyproject.toml requirements.lock README.md LICENSE ./
 COPY src ./src
-RUN pip install --no-cache-dir --constraint requirements.lock . && pip check
+# Every runtime dependency must match a hash recorded in requirements.lock.
+# pip is then removed: nothing installs packages at runtime, and its vendored
+# libraries otherwise remain in the image as unpatched copies.
+RUN pip install --no-cache-dir --require-hashes --requirement requirements.lock \
+    && pip install --no-cache-dir --no-deps . \
+    && pip check \
+    && pip uninstall --yes pip
 
 USER app
 RUN claude --version && codex --version
@@ -42,4 +53,4 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)" || exit 1
 
-CMD ["uvicorn", "ai_usage_monitor.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uvicorn", "ai_usage_monitor.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--no-server-header"]
