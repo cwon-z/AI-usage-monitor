@@ -1,6 +1,6 @@
 #!/bin/sh
 # Re-create this server's own Claude login. Interactive: run it as
-#   ssh -t core-apps /srv/data/ai-usage-monitor/scripts/claude-login.sh
+#   ssh -t <host> /path/to/ai-usage-monitor/scripts/claude-login.sh
 #
 # Claude Code 2.1.266 has no device-code flow: open the printed URL, sign in,
 # and paste the code it shows back here. Afterwards the watchdog collects at

@@ -17,6 +17,10 @@ cd "$(dirname "$0")/.."
 CRED=/home/app/.claude/.credentials.json
 THRESHOLD=${THRESHOLD:-600}   # attempt a refresh under 10 minutes remaining
 FLOOR=60                      # below this, a non-refresh is a real failure
+# The alias resolves inside the pinned CLI (claude-haiku-4-5 on 2.1.266) and
+# moves with it. A dated model ID would start failing here, and so silently
+# stop renewal, once that snapshot is retired upstream.
+MODEL=${REFRESH_MODEL:-haiku}
 
 remaining() {
     docker compose exec -T ai-usage-monitor python -c "
@@ -46,7 +50,7 @@ if [ "$REMAIN" -gt "$THRESHOLD" ]; then
 fi
 
 if ! docker compose exec -T ai-usage-monitor sh -c \
-        'cd /tmp && claude -p "ok" --model claude-haiku-4-5-20251001' >/dev/null 2>&1; then
+        'cd /tmp && claude -p "ok" --model "$1"' sh "$MODEL" >/dev/null 2>&1; then
     echo "$(date -Is) ERROR: trigger call failed at ${REMAIN}s remaining"
     exit 1
 fi

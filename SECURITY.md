@@ -5,7 +5,7 @@ repository does **not** mean its running API should be public.
 
 ## Reporting a vulnerability
 
-Use GitHub's **Security â†’ Report a vulnerability** if private reporting is
+Use GitHub's **Security → Report a vulnerability** if private reporting is
 enabled for this repository. If it is unavailable, open an issue requesting a
 private contact channel, without exploit details, credentials, or account data.
 Do not post authentication files, configured KWGT exports, database snapshots,

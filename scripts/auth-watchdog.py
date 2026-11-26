@@ -19,8 +19,16 @@ the one command to run instead: scripts/claude-login.sh.
 
 Files under state/ (mode 600, not in the repo):
   kuma-push-url    the monitor's push URL, which embeds its token
-  discord-webhook  where sign-in codes are posted
+  discord-webhook  where sign-in codes are posted (https only)
+  api-url          optional: this deployment's API base, when it is not published
+                   on the Compose default below, e.g. http://<private-ip>:9010/api/v1
+  ssh-host         optional: the name you ssh to, when it is not this hostname
   watchdog.json    what the previous run saw
+
+AI_USAGE_API and AI_USAGE_SSH_HOST in the environment override the two optional
+files, and AI_USAGE_STATE_DIR relocates state/ itself. The widget token is sent
+to the API base, so use https unless the address is loopback or already inside
+an encrypted private network.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -40,11 +49,35 @@ os.environ["PATH"] = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # cron
 )
 ROOT = Path(__file__).resolve().parent.parent
-STATE = ROOT / "state"
-API = os.environ.get("AI_USAGE_API", "http://100.127.116.72:9010/api/v1")
+STATE = Path(os.environ.get("AI_USAGE_STATE_DIR") or ROOT / "state")
 SERVICE = "ai-usage-monitor"
 REOFFER_SECONDS = int(os.environ.get("CODEX_LOGIN_REOFFER_SECONDS", 3 * 3600))
-CLAUDE_LOGIN = f"ssh -t core-apps {ROOT}/scripts/claude-login.sh"
+
+
+def setting(variable: str, state_file: str, default: str) -> str:
+    """A deployment-specific value: environment, then state/<file>, then default."""
+    value = os.environ.get(variable, "").strip()
+    if not value:
+        try:
+            value = (STATE / state_file).read_text().strip()
+        except OSError:
+            value = ""
+    return value or default
+
+
+def http_url(value: str, what: str, *, https_only: bool = False) -> str:
+    """Reject other schemes: urllib would also open file:// and ftp:// URLs."""
+    allowed = ("https",) if https_only else ("http", "https")
+    if urllib.parse.urlsplit(value).scheme.lower() not in allowed:
+        raise RuntimeError(f"{what} must be an {'/'.join(allowed)} URL")
+    return value
+
+
+# The default is the loopback port the base Compose file publishes. Addresses
+# of a particular deployment belong in state/ or the environment, not here.
+API = setting("AI_USAGE_API", "api-url", "http://127.0.0.1:8000/api/v1").rstrip("/")
+SSH_HOST = setting("AI_USAGE_SSH_HOST", "ssh-host", socket.gethostname())
+CLAUDE_LOGIN = f"ssh -t {SSH_HOST} {ROOT}/scripts/claude-login.sh"
 KST = timezone(timedelta(hours=9))
 UA = "DiscordBot (https://github.com/cwon-z/AI-usage-monitor, 1.0)"
 
@@ -111,15 +144,18 @@ def compose(*args: str, check: bool = True) -> str:
 def api(path: str, method: str = "GET") -> dict:
     token = (ROOT / "secrets" / "widget-api-token").read_text().strip()
     request = urllib.request.Request(
-        f"{API}{path}", method=method, headers={"Authorization": f"Bearer {token}"}
+        http_url(f"{API}{path}", "the usage API base"),
+        method=method,
+        headers={"Authorization": f"Bearer {token}"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310 - scheme checked by http_url
         return json.load(response)
 
 
 def push(status: str, message: str) -> None:
     query = urllib.parse.urlencode({"status": status, "msg": message[:500]})
-    urllib.request.urlopen(f"{secret('kuma-push-url')}?{query}", timeout=15).read()
+    url = http_url(secret("kuma-push-url"), "state/kuma-push-url")
+    urllib.request.urlopen(f"{url}?{query}", timeout=15).read()  # nosec B310 - scheme checked by http_url
 
 
 def discord(text: str) -> None:
@@ -131,11 +167,11 @@ def discord(text: str) -> None:
         }
     ).encode()
     request = urllib.request.Request(
-        secret("discord-webhook"),
+        http_url(secret("discord-webhook"), "state/discord-webhook", https_only=True),
         data=body,
         headers={"Content-Type": "application/json", "User-Agent": UA},
     )
-    urllib.request.urlopen(request, timeout=15).read()
+    urllib.request.urlopen(request, timeout=15).read()  # nosec B310 - scheme checked by http_url
 
 
 def offer_codex_login() -> tuple[str, str]:
@@ -144,7 +180,14 @@ def offer_codex_login() -> tuple[str, str]:
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         time.sleep(3)
-        out = compose("exec", "-T", SERVICE, "cat", "/tmp/codex-login.out", check=False)
+        out = compose(
+            "exec",
+            "-T",
+            SERVICE,
+            "cat",
+            "/tmp/codex-login.out",  # nosec B108 - the container's own tmpfs, single user
+            check=False,
+        )
         out = re.sub(r"\x1b\[[0-9;]*m", "", out)
         url = re.search(r"https://auth\.openai\.com/\S+", out)
         code = re.search(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b", out)
@@ -167,7 +210,7 @@ def offer_and_announce(state: dict) -> str:
     try:
         post_codex_code(url, code, until)
         return f"sign-in code {code} posted to Discord (until {until} KST)"
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:  # a bad webhook is like a missing one
         log(f"Discord post skipped ({exc}); the code rides in the Kuma alert")
         return f"sign in at {url} with code {code} (until {until} KST)"
 
@@ -178,7 +221,7 @@ def post_codex_code(url: str, code: str, until: str) -> None:
         f"Open {url} and enter **`{code}`** (valid until {until} KST). "
         "Collection resumes by itself once you approve. "
         f"Unused, a new code follows in {REOFFER_SECONDS // 3600} h; "
-        f"for one now, run `{ROOT}/scripts/auth-watchdog.py --codex-login` on core-apps."
+        f"for one now, run `{ROOT}/scripts/auth-watchdog.py --codex-login` on {SSH_HOST}."
     )
 
 
@@ -240,14 +283,14 @@ def main() -> int:
             discord(
                 "🧪 ai-usage-monitor: test of the sign-in notifier - no action needed."
             )
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             log(f"Discord test skipped: {exc}")
         log("test alert pushed down; this run pushes the real state next")
         time.sleep(3)
     if "--kick" in flags:
         try:
             api("/usage/refresh", method="POST")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             log(f"refresh request failed: {exc}")
     if "--codex-login" in flags:
         state["codex_hint"] = offer_and_announce(state)
@@ -283,13 +326,16 @@ def main() -> int:
             state["last_status"] = status
         try:
             push(status, message)
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             log(f"ERROR: Kuma push failed: {exc}")
             exit_code = 1
 
+    # Owner-only from the moment it exists: the state can hold a live sign-in code.
     tmp = state_file.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state))
-    tmp.chmod(0o600)
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write(json.dumps(state))
     tmp.replace(state_file)
     return exit_code
 
