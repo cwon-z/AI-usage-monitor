@@ -1,4 +1,4 @@
-FROM node:24-trixie-slim AS cli
+FROM node:25-trixie-slim AS cli
 
 ARG CLAUDE_CODE_VERSION=2.1.266
 ARG CODEX_VERSION=0.150.1
