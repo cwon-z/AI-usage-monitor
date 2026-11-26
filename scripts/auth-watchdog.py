@@ -36,7 +36,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-os.environ["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # cron
+os.environ["PATH"] = (
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # cron
+)
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state"
 API = os.environ.get("AI_USAGE_API", "http://100.127.116.72:9010/api/v1")
@@ -94,10 +96,15 @@ def secret(name: str) -> str:
 def compose(*args: str, check: bool = True) -> str:
     result = subprocess.run(
         ["docker", "compose", *args],
-        cwd=ROOT, capture_output=True, text=True, timeout=60,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if check and result.returncode != 0:
-        raise RuntimeError(f"docker compose {args[0]} failed: {result.stderr.strip()[:200]}")
+        raise RuntimeError(
+            f"docker compose {args[0]} failed: {result.stderr.strip()[:200]}"
+        )
     return result.stdout
 
 
@@ -117,10 +124,15 @@ def push(status: str, message: str) -> None:
 
 def discord(text: str) -> None:
     body = json.dumps(
-        {"content": text, "username": "ai-usage-monitor", "allowed_mentions": {"parse": []}}
+        {
+            "content": text,
+            "username": "ai-usage-monitor",
+            "allowed_mentions": {"parse": []},
+        }
     ).encode()
     request = urllib.request.Request(
-        secret("discord-webhook"), data=body,
+        secret("discord-webhook"),
+        data=body,
         headers={"Content-Type": "application/json", "User-Agent": UA},
     )
     urllib.request.urlopen(request, timeout=15).read()
@@ -225,7 +237,9 @@ def main() -> int:
     if "--test-alert" in flags:
         push("down", "TEST from auth-watchdog - checking the alert path, ignore")
         try:
-            discord("🧪 ai-usage-monitor: test of the sign-in notifier - no action needed.")
+            discord(
+                "🧪 ai-usage-monitor: test of the sign-in notifier - no action needed."
+            )
         except OSError as exc:
             log(f"Discord test skipped: {exc}")
         log("test alert pushed down; this run pushes the real state next")

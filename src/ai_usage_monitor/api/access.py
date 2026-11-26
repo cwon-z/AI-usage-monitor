@@ -24,9 +24,16 @@ class AccessVerifier:
             with self.lock:
                 key = self.keys.get_signing_key_from_jwt(token).key
             claims = jwt.decode(
-                token, key, algorithms=["RS256"], audience=self.audience,
-                issuer=self.issuer, options={"require": ["exp", "iat", "iss", "aud", "sub", "email"]},
+                token,
+                key,
+                algorithms=["RS256"],
+                audience=self.audience,
+                issuer=self.issuer,
+                options={"require": ["exp", "iat", "iss", "aud", "sub", "email"]},
             )
-            return isinstance(claims["email"], str) and claims["email"].lower() in self.emails
+            return (
+                isinstance(claims["email"], str)
+                and claims["email"].lower() in self.emails
+            )
         except (jwt.PyJWTError, ValueError, TypeError, OSError):
             return False

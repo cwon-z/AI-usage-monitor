@@ -40,9 +40,13 @@ class MCPAuthentication:
             return
         headers = Headers(scope=scope)
         public = (
-            bool(self.public_host)
-            and headers.get("host", "").lower().split(":")[0] == self.public_host
-        ) or "cf-access-jwt-assertion" in headers or "cf-connecting-ip" in headers
+            (
+                bool(self.public_host)
+                and headers.get("host", "").lower().split(":")[0] == self.public_host
+            )
+            or "cf-access-jwt-assertion" in headers
+            or "cf-connecting-ip" in headers
+        )
         if public:
             authorized = bool(self.access) and await asyncio.to_thread(
                 self.access.verify, headers.get("cf-access-jwt-assertion", "")
