@@ -408,3 +408,35 @@ def test_export_does_not_follow_symlinks(tmp_path):
     with pytest.raises(ValueError):
         atomic_secret(target, "new", replace=True)
     assert source.read_text() == "preserve"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+def test_new_database_and_sidecars_are_owner_only(tmp_path):
+    previous = os.umask(0o022)
+    try:
+        path = tmp_path / "data" / "usage.db"
+        engine, factory = create_database(f"sqlite:///{path}")
+        try:
+            assert HistoryRepository(factory).ping()
+            HistoryRepository(factory).save_failure("claude", "timeout")
+            assert path.parent.stat().st_mode & 0o777 == 0o700
+            files = sorted(path.parent.iterdir())
+            assert path in files
+            for file in files:
+                assert file.stat().st_mode & 0o777 == 0o600, file.name
+        finally:
+            engine.dispose()
+    finally:
+        os.umask(previous)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+def test_existing_database_modes_are_left_to_the_operator(tmp_path):
+    path = tmp_path / "usage.db"
+    path.touch()
+    path.chmod(0o640)
+    tmp_path.chmod(0o750)
+    engine, _factory = create_database(f"sqlite:///{path}")
+    engine.dispose()
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert tmp_path.stat().st_mode & 0o777 == 0o750
